@@ -1,0 +1,445 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agentic RAG Paper QA - 智能论文问答系统</title>
+<style>
+  *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#0f1117;color:#e1e4e8;height:100vh;overflow:hidden}
+  .app{display:flex;height:100vh}
+  /* ====== 左侧面板 ====== */
+  .sidebar{width:320px;background:#161b22;border-right:1px solid #30363d;display:flex;flex-direction:column;flex-shrink:0}
+  .sidebar-header{padding:16px 20px;border-bottom:1px solid #30363d}
+  .sidebar-header h1{font-size:18px;font-weight:700;color:#58a6ff;margin-bottom:4px}
+  .sidebar-header p{font-size:12px;color:#8b949e}
+  .upload-zone{margin:16px 20px;border:2px dashed #30363d;border-radius:10px;padding:24px 16px;text-align:center;cursor:pointer;transition:border-color .2s,background .2s}
+  .upload-zone:hover{border-color:#58a6ff;background:rgba(88,166,255,.05)}
+  .upload-zone.dragover{border-color:#3fb950;background:rgba(63,185,80,.08)}
+  .upload-zone input{display:none}
+  .upload-zone .icon{font-size:32px;margin-bottom:8px}
+  .upload-zone .label{font-size:14px;color:#c9d1d9;margin-bottom:4px}
+  .upload-zone .sub{font-size:11px;color:#8b949e}
+  .upload-progress{display:none;margin:0 20px;padding:8px 12px;background:#1a7f3750;border:1px solid #1a7f37;border-radius:8px;font-size:13px}
+  .upload-error{display:none;margin:0 20px;padding:8px 12px;background:#da363350;border:1px solid #da3633;border-radius:8px;font-size:13px}
+  .doc-list{flex:1;overflow-y:auto;padding:8px 20px 20px}
+  .doc-list h3{font-size:13px;color:#8b949e;text-transform:uppercase;letter-spacing:.5px;margin:8px 0}
+  .doc-item{display:flex;align-items:center;padding:10px 12px;margin-bottom:6px;background:#21262d;border-radius:8px;border:1px solid #30363d;transition:border-color .2s}
+  .doc-item:hover{border-color:#58a6ff}
+  .doc-item .doc-icon{font-size:20px;margin-right:10px}
+  .doc-item .doc-info{flex:1;min-width:0}
+  .doc-item .doc-name{font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .doc-item .doc-meta{font-size:11px;color:#8b949e;margin-top:2px}
+  .doc-item .doc-badge{padding:2px 8px;border-radius:10px;font-size:11px}
+  .doc-item .doc-badge.ok{background:#1a7f3725;color:#3fb950}
+  .doc-item .doc-badge.fail{background:#da363325;color:#f85149}
+  .doc-item .doc-badge.proc{background:#d2992225;color:#d29922}
+  .doc-item .doc-delete{display:none;margin-left:8px;padding:4px 8px;border:none;background:#da363325;color:#f85149;border-radius:6px;cursor:pointer;font-size:12px;transition:background .2s}
+  .doc-item .doc-delete:hover{background:#da363350}
+  .doc-item:hover .doc-delete{display:inline-block}
+  .no-docs{padding:20px;text-align:center;color:#484f58;font-size:13px}
+  /* ====== 右侧主区域 ====== */
+  .main{flex:1;display:flex;flex-direction:column;min-width:0}
+  .topbar{display:flex;align-items:center;justify-content:space-between;padding:12px 20px;background:#161b22;border-bottom:1px solid #30363d}
+  .mode-switch{display:flex;background:#21262d;border-radius:8px;overflow:hidden}
+  .mode-btn{padding:6px 16px;font-size:13px;cursor:pointer;border:none;color:#8b949e;background:transparent;transition:all .2s}
+  .mode-btn.active{background:#1f6feb;color:#fff}
+  .mode-btn:hover:not(.active){color:#c9d1d9;background:#30363d}
+  .cache-toggle{display:flex;align-items:center;gap:8px;font-size:12px;color:#8b949e}
+  .cache-toggle input[type=checkbox]{accent-color:#3fb950}
+  .chat-area{flex:1;overflow-y:auto;padding:20px;display:flex;flex-direction:column;gap:12px}
+  .chat-msg{max-width:85%;animation:fadeIn .3s}
+  .chat-msg.user{align-self:flex-end}
+  .chat-msg.assistant{align-self:flex-start}
+  .chat-msg .bubble{padding:12px 16px;border-radius:12px;font-size:14px;line-height:1.6}
+  .chat-msg.user .bubble{background:#1f6feb;color:#fff;border-bottom-right-radius:4px}
+  .chat-msg.assistant .bubble{background:#21262d;color:#e1e4e8;border-bottom-left-radius:4px;border:1px solid #30363d}
+  .chat-msg .bubble .cache-badge{display:inline-block;padding:1px 6px;background:#3fb95020;color:#3fb950;border-radius:4px;font-size:10px;margin-left:6px}
+  .chat-msg .sources{margin-top:8px;padding:0}
+  .chat-msg .source-item{font-size:11px;color:#8b949e;margin-bottom:4px;padding:4px 8px;background:#0d1117;border-radius:4px;cursor:pointer}
+  .chat-msg .source-item:hover{background:#161b22}
+  .chat-msg .source-item .source-score{color:#58a6ff;margin-right:4px}
+  .input-area{display:flex;padding:12px 20px;border-top:1px solid #30363d;background:#161b22;gap:8px}
+  .input-area input{flex:1;padding:10px 16px;background:#0d1117;border:1px solid #30363d;border-radius:10px;color:#e1e4e8;font-size:14px;outline:none}
+  .input-area input:focus{border-color:#58a6ff}
+  .input-area button{padding:10px 20px;background:#1f6feb;border:none;border-radius:10px;color:#fff;font-size:14px;cursor:pointer;font-weight:600;transition:background .2s}
+  .input-area button:hover{background:#388bfd}
+  .input-area button:disabled{background:#21262d;color:#484f58;cursor:not-allowed}
+  .welcome{text-align:center;color:#8b949e;padding-top:40px}
+  .welcome h2{font-size:24px;color:#c9d1d9;margin-bottom:8px}
+  .welcome p{font-size:14px}
+  .typing-indicator{display:flex;gap:4px;padding:8px 16px}
+  .typing-indicator span{width:8px;height:8px;border-radius:50%;background:#484f58;animation:bounce 1.5s infinite}
+  .typing-indicator span:nth-child(2){animation-delay:.2s}
+  .typing-indicator span:nth-child(3){animation-delay:.4s}
+  @keyframes bounce{0%,60%,100%{transform:translateY(0)}30%{transform:translateY(-6px)}}
+  @keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+  .status-bar{padding:4px 20px;font-size:11px;color:#484f58;text-align:center;border-top:1px solid #1a1e25;display:flex;gap:16px;justify-content:center}
+  .status-dot{display:inline-block;width:6px;height:6px;border-radius:50%;margin-right:4px}
+  .status-dot.online{background:#3fb950}
+  .status-dot.offline{background:#f85149}
+  ::-webkit-scrollbar{width:6px}
+  ::-webkit-scrollbar-track{background:transparent}
+  ::-webkit-scrollbar-thumb{background:#30363d;border-radius:3px}
+  ::-webkit-scrollbar-thumb:hover{background:#484f58}
+</style>
+</head>
+<body>
+<div class="app">
+  <!-- ====== 左侧面板 ====== -->
+  <div class="sidebar">
+    <div class="sidebar-header">
+      <h1>📚 Paper QA</h1>
+      <p>Agentic RAG 论文问答系统</p>
+    </div>
+
+    <div class="upload-zone" id="uploadZone">
+      <input type="file" id="fileInput" accept=".pdf,.txt,.md">
+      <div class="icon">📄</div>
+      <div class="label">点击或拖拽上传论文</div>
+      <div class="sub">支持 PDF / TXT / Markdown</div>
+    </div>
+
+    <div class="upload-progress" id="uploadProgress"></div>
+    <div class="upload-error" id="uploadError"></div>
+
+    <div class="doc-list" id="docList">
+      <h3>已上传论文</h3>
+      <div class="no-docs">暂无论文，请上传</div>
+    </div>
+  </div>
+
+  <!-- ====== 右侧主区域 ====== -->
+  <div class="main">
+    <div class="topbar">
+      <div class="mode-switch">
+        <button class="mode-btn active" data-mode="agentic" onclick="setMode('agentic')">🧠 Agentic 模式</button>
+        <button class="mode-btn" data-mode="standard" onclick="setMode('standard')">📖 标准 RAG</button>
+      </div>
+      <div class="cache-toggle">
+        <label><input type="checkbox" id="useCache" checked> 语义缓存</label>
+        <span id="cacheStats" style="display:none;margin-left:8px"></span>
+      </div>
+    </div>
+
+    <div class="chat-area" id="chatArea">
+      <div class="welcome">
+        <h2>👋 欢迎使用 Agentic RAG</h2>
+        <p>请先上传论文，然后开始提问</p>
+        <p style="font-size:12px;margin-top:8px;color:#484f58">
+          提示：Agentic 模式支持多轮推理和工具调用
+        </p>
+      </div>
+    </div>
+
+    <div class="input-area">
+      <input type="text" id="messageInput" placeholder="输入你的问题..." disabled>
+      <button id="sendBtn" disabled onclick="sendMessage()">发送</button>
+    </div>
+
+    <div class="status-bar">
+      <span><span class="status-dot" id="statusDb"></span> PostgreSQL</span>
+      <span><span class="status-dot" id="statusOs"></span> OpenSearch</span>
+      <span><span class="status-dot" id="statusCache"></span> Redis</span>
+      <span><span class="status-dot" id="statusOllama"></span> Ollama</span>
+    </div>
+  </div>
+</div>
+
+<script>
+// ===== 全局状态 =====
+const API_BASE = '/api/v1';
+let currentMode = 'agentic';
+let hasDocuments = false;
+
+// ===== 初始化 =====
+document.addEventListener('DOMContentLoaded', () => {
+  initUpload();
+  loadDocuments();
+  checkHealth();
+  document.getElementById('messageInput').addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+  });
+  document.getElementById('useCache').addEventListener('change', () => {
+    document.getElementById('cacheStats').style.display = 'none';
+  });
+});
+
+// ===== 健康检查 =====
+async function checkHealth() {
+  try {
+    const res = await fetch('/health');
+    if (res.ok) {
+      document.getElementById('statusDb').classList.add('online');
+      document.getElementById('statusOs').classList.add('online');
+      document.getElementById('statusOllama').classList.add('online');
+      document.getElementById('statusCache').classList.add('online');
+    }
+  } catch (e) {
+    console.warn('后端未启动');
+  }
+  // 每30秒检查
+  setTimeout(checkHealth, 30000);
+}
+
+// ===== 上传 =====
+function initUpload() {
+  const zone = document.getElementById('uploadZone');
+  const input = document.getElementById('fileInput');
+
+  zone.addEventListener('click', () => input.click());
+  zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('dragover'); });
+  zone.addEventListener('dragleave', () => zone.classList.remove('dragover'));
+  zone.addEventListener('drop', event => {
+    event.preventDefault();
+    zone.classList.remove('dragover');
+    const files = event.dataTransfer.files;
+    if (files.length) uploadFile(files[0]);
+  });
+  input.addEventListener('change', () => { if (input.files.length) uploadFile(input.files[0]); });
+}
+
+async function uploadFile(file) {
+  const progressDiv = document.getElementById('uploadProgress');
+  const errorDiv = document.getElementById('uploadError');
+  errorDiv.style.display = 'none';
+  progressDiv.style.display = 'block';
+  progressDiv.textContent = `⏳ 正在上传 ${file.name}（${formatSize(file.size)}）...`;
+  progressDiv.style.color = '#d29922';
+
+  try {
+    const formData = new FormData();
+    formData.append('file', file);
+
+    const res = await fetch(`${API_BASE}/documents/upload`, { method: 'POST', body: formData });
+    
+    // 检查 HTTP 状态码
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.detail || `HTTP ${res.status}: 上传失败`);
+    }
+    
+    const data = await res.json();
+
+    if (data.ok) {
+      progressDiv.textContent = `✅ ${data.message || '上传成功，正在后台处理...'}`;
+      progressDiv.style.color = '#3fb950';
+      setTimeout(() => { progressDiv.style.display = 'none'; }, 4000);
+      loadDocuments();
+      // 后台处理需要时间，定期刷新
+      setTimeout(() => { loadDocuments(); }, 5000);
+      setTimeout(() => { loadDocuments(); }, 15000);
+    } else {
+      throw new Error(data.detail || '服务器返回异常');
+    }
+  } catch (err) {
+    progressDiv.style.display = 'none';
+    errorDiv.style.display = 'block';
+    errorDiv.textContent = `❌ 上传失败：${err.message}`;
+    console.error('Upload error:', err);
+    setTimeout(() => { errorDiv.style.display = 'none'; }, 8000);
+  }
+}
+
+// ===== 文档列表 =====
+async function loadDocuments() {
+  try {
+    const res = await fetch(`${API_BASE}/documents`);
+    if (!res.ok) throw new Error('获取失败');
+    const data = await res.json();
+    const docs = data.documents || [];
+    renderDocList(docs);
+    hasDocuments = docs.length > 0;
+    updateInputState();
+  } catch (err) {
+    console.warn('加载文档列表失败', err);
+  }
+}
+
+function renderDocList(docs) {
+  const container = document.getElementById('docList');
+  if (!docs.length) {
+    container.innerHTML = '<h3>已上传论文</h3><div class="no-docs">暂无论文，请上传</div>';
+    return;
+  }
+  let html = '<h3>已上传论文</h3>';
+  docs.forEach(doc => {
+    const badgeCls = doc.status === 'completed' ? 'ok' : doc.status === 'failed' ? 'fail' : 'proc';
+    const badgeText = doc.status === 'completed' ? '已解析' : doc.status === 'failed' ? '失败' : '处理中';
+    const date = new Date(doc.created_at).toLocaleDateString('zh-CN');
+    html += `
+      <div class="doc-item" data-id="${esc(doc.id)}">
+        <div class="doc-icon">📄</div>
+        <div class="doc-info">
+          <div class="doc-name" title="${esc(doc.filename)}">${esc(doc.filename)}</div>
+          <div class="doc-meta">${date} · ${doc.chunks_count || 0} 块 · ${formatSize(doc.file_size)}</div>
+        </div>
+        <span class="doc-badge ${badgeCls}">${badgeText}</span>
+        <button class="doc-delete" onclick="deleteDocument('${esc(doc.id)}', '${esc(doc.filename)}')" title="删除">🗑️</button>
+      </div>`;
+  });
+  container.innerHTML = html;
+}
+
+// ===== 删除文档 =====
+async function deleteDocument(docId, filename) {
+  if (!confirm(`确定要删除「${filename}」吗？\n\n此操作会同时删除：\n- PostgreSQL 中的文档记录\n- OpenSearch 中的索引数据\n- 磁盘上的原始文件`)) {
+    return;
+  }
+
+  try {
+    const res = await fetch(`${API_BASE}/documents/${docId}`, { method: 'DELETE' });
+    if (!res.ok) throw new Error('删除失败');
+    const data = await res.json();
+    console.log('删除成功:', data);
+    loadDocuments();
+  } catch (err) {
+    alert(`删除失败：${err.message}`);
+    console.error('Delete error:', err);
+  }
+}
+
+// ===== 聊天 =====
+async function sendMessage() {
+  const input = document.getElementById('messageInput');
+  const message = input.value.trim();
+  if (!message) return;
+
+  const useCache = document.getElementById('useCache').checked;
+
+  // 显示用户消息
+  appendMessage('user', message);
+  input.value = '';
+
+  // 显示输入指示器
+  const typingEl = showTyping();
+
+  const sendBtn = document.getElementById('sendBtn');
+  sendBtn.disabled = true;
+
+  const startTime = Date.now();
+
+  try {
+    const res = await fetch(`${API_BASE}/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message, mode: currentMode, use_cache: useCache, top_k: 5 }),
+    });
+    const data = await res.json();
+
+    removeTyping(typingEl);
+
+    // 显示回复
+    const elapsed = Date.now() - startTime;
+    appendMessage('assistant', data.answer, {
+      sources: data.sources || [],
+      fromCache: data.from_cache,
+      similarity: data.similarity,
+      mode: data.mode,
+      elapsed,
+    });
+
+    // 显示缓存统计
+    if (data.from_cache && data.similarity) {
+      const span = document.getElementById('cacheStats');
+      span.style.display = 'inline';
+      span.textContent = `命中 ${(data.similarity * 100).toFixed(0)}%`;
+      setTimeout(() => { span.style.display = 'none'; }, 4000);
+    }
+  } catch (err) {
+    removeTyping(typingEl);
+    appendMessage('assistant', `❌ 请求失败：${err.message}\n请确认后端已启动（运行 python run.py）`);
+  }
+
+  sendBtn.disabled = false;
+  input.focus();
+}
+
+function appendMessage(role, content, meta = {}) {
+  const area = document.getElementById('chatArea');
+  // 清除欢迎消息
+  const welcome = area.querySelector('.welcome');
+  if (welcome) welcome.remove();
+
+  const div = document.createElement('div');
+  div.className = `chat-msg ${role}`;
+
+  let badgeHtml = '';
+  if (meta.fromCache) {
+    const pct = (meta.similarity * 100).toFixed(0);
+    badgeHtml = `<span class="cache-badge">⚡ 缓存命中 ${pct}%</span>`;
+  }
+
+  let sourcesHtml = '';
+  if (meta.sources && meta.sources.length > 0) {
+    sourcesHtml = '<div style="font-size:11px;color:#8b949e;margin-top:6px">📚 引用来源：</div>';
+    meta.sources.slice(0, 3).forEach((s, i) => {
+      const preview = (s.content || '').slice(0, 120);
+      const score = s.score ? `<span class="source-score">[${s.score.toFixed(3)}]</span>` : '';
+      sourcesHtml += `<div class="source-item" title="${esc(s.content || '')}">${i + 1}. ${score} ${esc(preview)}...</div>`;
+    });
+  }
+
+  const elapsedText = meta.elapsed ? `(${meta.elapsed}ms)` : '';
+  div.innerHTML = `
+    <div class="bubble">
+      ${escapeHtml(content)}${badgeHtml}
+    </div>
+    ${sourcesHtml}
+    <div style="font-size:10px;color:#484f58;margin-top:4px">${meta.mode || ''} ${elapsedText}</div>
+  `;
+
+  area.appendChild(div);
+  area.scrollTop = area.scrollHeight;
+}
+
+function showTyping() {
+  const area = document.getElementById('chatArea');
+  const welcome = area.querySelector('.welcome');
+  if (welcome) welcome.remove();
+
+  const div = document.createElement('div');
+  div.className = 'chat-msg assistant typing-msg';
+  div.innerHTML = '<div class="bubble"><div class="typing-indicator"><span></span><span></span><span></span></div></div>';
+  area.appendChild(div);
+  area.scrollTop = area.scrollHeight;
+  return div;
+}
+
+function removeTyping(el) {
+  if (el && el.parentNode) el.parentNode.removeChild(el);
+}
+
+// ===== 模式切换 =====
+function setMode(mode) {
+  currentMode = mode;
+  document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
+  document.querySelector(`.mode-btn[data-mode="${mode}"]`).classList.add('active');
+  updateInputState();
+}
+
+function updateInputState() {
+  const input = document.getElementById('messageInput');
+  const btn = document.getElementById('sendBtn');
+  const hasMsg = input.value.trim().length > 0;
+  input.disabled = !hasDocuments;
+  btn.disabled = !(hasDocuments && hasMsg);
+  if (!hasDocuments) {
+    input.placeholder = '请先上传论文...';
+  } else {
+    input.placeholder = currentMode === 'agentic' ? 'Agentic 模式：直接提问，AI 会自己搜索...' : '标准 RAG 模式：输入问题，自动检索相关段落...';
+  }
+}
+
+document.getElementById('messageInput').addEventListener('input', updateInputState);
+
+// ===== 工具函数 =====
+function esc(s) { return String(s).replace(/"/g, '&quot;').replace(/</g, '&lt;'); }
+function escapeHtml(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+function formatSize(bytes) { if (!bytes) return '0B'; const u = ['B','KB','MB']; let i = 0; while (bytes >= 1024 && i < 2) { bytes /= 1024; i++; } return bytes.toFixed(1) + u[i]; }
+
+// 定期刷新文档列表
+setInterval(loadDocuments, 10000);
+</script>
+</body>
+</html>

@@ -1,0 +1,47 @@
+ migrations directory
+
+这是一个关于 Alembic 的 brief 介绍：
+
+Rationale
+---------
+
+Alembic 是 SQLAlchemy 的作者编写的数据库迁移工具。
+
+It uses SQLAlchemy as the underlying engine to manipulate the database.
+
+Compared with South, the migration tool that I originally used with Django many
+moons ago, Alembic:
+
+* is much faster
+* is a lot more flexible about handling the "version" number of a migration
+* is not tied to a particular framework
+* works with SQLAlchemy representations of the database, which is a plus and a
+  minus (see below)
+
+Using Alembic with the current project
+---------
+
+A new migration can be created using the command::
+
+    alembic revision --autogenerate -m "create documets table"
+
+This will then generate a file within the `versions` directory, which will have
+the name of the message passed above, with a prefix that includes the revision
+id (a 12-digit code).
+
+The migration can then be run using the command::
+
+    alembic upgrade head
+
+We can also revert a migration using the command::
+
+    alembic downgrade -1
+
+...which will take us back one revision.
+
+Other useful commands include::
+
+    alembic history          # see all past migrations
+    alembic current          # see the current revision
+    alembic branches         # see any branching in the migration graph
+    alembic heads            # see the current head revision(s)
