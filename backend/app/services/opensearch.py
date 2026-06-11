@@ -25,6 +25,60 @@ from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
+# OpenSearch 连接状态（全局标记，避免重复尝试连接）
+_opensearch_available = None  # None=未检测, True=可用, False=不可用
+
+
+def is_opensearch_available() -> bool:
+    """检查 OpenSearch 是否可用（带缓存）"""
+    global _opensearch_available
+    if _opensearch_available is None:
+        # 未检测过，尝试连接
+        try:
+            import asyncio
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                # 已有事件循环在运行，创建一个任务
+                loop.create_task(_check_opensearch())
+            else:
+                # 没有事件循环，直接运行
+                _opensearch_available = loop.run_until_complete(_check_opensearch_sync())
+        except:
+            _opensearch_available = False
+    return _opensearch_available or False
+
+
+async def _check_opensearch() -> bool:
+    """异步检查 OpenSearch 连接"""
+    global _opensearch_available
+    try:
+        client = AsyncOpenSearch(
+            hosts=[settings.OPENSEARCH_URL],
+            request_timeout=3,  # 3秒超时
+        )
+        await client.info()
+        await client.close()
+        _opensearch_available = True
+        logger.info("✅ OpenSearch 连接成功")
+    except:
+        _opensearch_available = False
+        logger.warning("⚠️ OpenSearch 不可用，将使用 PostgreSQL 存储")
+    return _opensearch_available or False
+
+
+async def _check_opensearch_sync() -> bool:
+    """同步检查 OpenSearch 连接（用于导入时）"""
+    try:
+        client = AsyncOpenSearch(
+            hosts=[settings.OPENSEARCH_URL],
+            request_timeout=3,
+        )
+        info = await client.info()
+        await client.close()
+        return True
+    except:
+        return False
+
 # ----------------------------------------------------------------
 # 索引映射 (Index Mapping)
 # ----------------------------------------------------------------

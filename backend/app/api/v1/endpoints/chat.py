@@ -10,7 +10,7 @@
 import logging
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from app.services.agent import agent_service
@@ -30,9 +30,9 @@ class ChatRequest(BaseModel):
 
     message: str
     session_id: Optional[str] = None
-    mode: str = "agentic"  # "agentic" or "standard"
+    mode: str = "agentic"
     top_k: int = 5
-    use_cache: bool = True  # 是否使用语义缓存
+    use_cache: bool = True
 
 
 class ChatResponse(BaseModel):
@@ -43,8 +43,8 @@ class ChatResponse(BaseModel):
     mode: str
     session_id: Optional[str] = None
     tokens_usage: Dict[str, Any] = {}
-    from_cache: bool = False  # 是否来自缓存
-    similarity: Optional[float] = None  # 缓存命中时的相似度
+    from_cache: bool = False
+    similarity: Optional[float] = None
 
 
 # ================================================================
@@ -56,11 +56,6 @@ class ChatResponse(BaseModel):
 async def chat(req: ChatRequest) -> ChatResponse:
     """
     发送消息并获取 AI 回答（带语义缓存）
-
-    流程（大白话）：
-    1. 如果开了缓存 → 先去 Redis 查有没有相似问题
-    2. 缓存命中 → 直接返回（飞快，~4ms）
-    3. 缓存未命中 → 正常跑 RAG/Agent → 把结果写进缓存
     """
     # Step 1：查缓存
     if req.use_cache and semantic_cache.enabled:
@@ -91,9 +86,10 @@ async def chat(req: ChatRequest) -> ChatResponse:
 
         # Step 3：写入缓存（过滤掉错误答案）
         if req.use_cache and semantic_cache.enabled:
-            # 检查答案是否包含错误信息，避免缓存报错
-            error_keywords = ["llama-server", "process has terminated", "signal: killed",
-                              "Connection refused", "timeout", "HTTP Error"]
+            error_keywords = [
+                "llama-server", "process has terminated", "signal: killed",
+                "Connection refused", "timeout", "HTTP Error",
+            ]
             is_error = any(kw in answer for kw in error_keywords)
             if not is_error:
                 await semantic_cache.set(
@@ -103,7 +99,7 @@ async def chat(req: ChatRequest) -> ChatResponse:
                     mode=mode,
                 )
             else:
-                logger.warning(f"答案包含错误信息，跳过缓存: {answer[:100]}")
+                logger.warning("答案包含错误信息，跳过缓存: %s", answer[:100])
 
         return ChatResponse(
             answer=answer,
@@ -114,15 +110,14 @@ async def chat(req: ChatRequest) -> ChatResponse:
         )
 
     except Exception as e:
-        logger.error(f"问答失败: {e}", exc_info=True)
+        logger.error("问答失败: %s", e, exc_info=True)
         raise HTTPException(status_code=500, detail=f"问答处理失败：{e}")
 
 
 @router.post("/standard", response_model=ChatResponse)
 async def chat_standard(req: ChatRequest) -> ChatResponse:
     """标准 RAG 模式（专用端点）"""
-    req.mode = "standard"  # 强制 standard 模式
-    # 启用缓存（避免每次都调 LLM）
+    req.mode = "standard"
     return await chat(req)
 
 
@@ -157,4 +152,7 @@ async def clear_cache(question: Optional[str] = None):
                  如果不传 → 清空所有语义缓存
     """
     deleted = await semantic_cache.clear(question)
-    return {"deleted": deleted, "message": "缓存已清理" if not question else f"已删除：{question}"}
+    return {
+        "deleted": deleted,
+        "message": "缓存已清理" if not question else f"已删除：{question}",
+    }

@@ -5,16 +5,6 @@ LangGraph Agent 服务（Phase 5 核心 - 修复版）
 - 用 LangGraph 构建多轮对话 Agent
 - Agent 可以自主决定要不要检索文档（tool calling）
 - 支持两种模式：standard RAG（直接检索）和 agentic（多轮推理）
-
-为什么用 LangGraph 而不是直接调 LLM？
-普通 RAG：用户问 → 搜文档 → 回答（固定流程）
-Agentic RAG：用户问 → Agent 思考 → 决定搜不搜、怎么搜 → 回答（灵活流程）
-
-核心概念（大白话）：
-- State【状态】：Agent 的"工作记忆"，每次对话更新一次
-- Node【节点】：一个处理步骤（比如"让 LLM 思考"、"调用搜索工具"）
-- Edge【边】：节点之间的跳转规则（比如"如果需要搜索，跳到搜索节点"）
-- Tool【工具】：Agent 可以调用的外部函数（比如 search_documents）
 """
 
 import logging
@@ -27,10 +17,31 @@ from langgraph.graph import END, StateGraph
 from typing_extensions import Annotated, TypedDict
 
 from app.core.config import settings
-from app.services.opensearch import opensearch_service
 from app.services.retrieval import retrieval_service
 
 logger = logging.getLogger(__name__)
+
+# ================================================================
+# OpenSearch 可选导入（避免启动失败）
+# ================================================================
+
+_opensearch_service = None
+_opensearch_available = False
+
+
+def _get_opensearch_service():
+    """懒加载 OpenSearch 服务"""
+    global _opensearch_service, _opensearch_available
+    if _opensearch_service is None:
+        try:
+            from app.services.opensearch import opensearch_service as os_svc
+            _opensearch_service = os_svc
+            _opensearch_available = True
+        except Exception as e:
+            logger.warning("OpenSearch 服务不可用: %s", e)
+            _opensearch_available = False
+    return _opensearch_service
+
 
 # ================================================================
 # 1. 定义 Agent 的状态（State）
@@ -40,12 +51,6 @@ logger = logging.getLogger(__name__)
 class AgentState(TypedDict):
     """
     Agent 的状态（工作记忆）
-
-    每次 Agent 处理一轮对话，这个状态就会更新一次。
-    它记录了：
-    - messages：对话历史（用户说了什么、Agent 回了什么）
-    - sources：引用来源（哪篇论文的哪一段）
-    - current_mode：当前是 standard 还是 agentic 模式
     """
     messages: Annotated[List[BaseMessage], "对话消息列表"]
     sources: Annotated[List[Dict[str, Any]], "引用来源"]
@@ -58,7 +63,11 @@ class AgentState(TypedDict):
 
 
 @tool
-async def search_documents(query: str, mode: Literal["bm25", "vector", "hybrid", "rrf"] = "hybrid", top_k: int = 5) -> str:
+async def search_documents(
+    query: str,
+    mode: Literal["bm25", "vector", "hybrid", "rrf"] = "hybrid",
+    top_k: int = 5,
+) -> str:
     """
     搜索已上传论文的相关段落。
 
@@ -77,18 +86,30 @@ async def search_documents(query: str, mode: Literal["bm25", "vector", "hybrid",
     返回：
       找到的相关文本段落，用分隔符分开
     """
-    try:
-        client = await opensearch_service.get_client()
+    os_svc = _get_opensearch_service()
+    if not _opensearch_available or os_svc is None:
+        # OpenSearch 不可用，使用 PostgreSQL 回退
+        return await _search_documents_fallback(query, top_k)
 
-        # 根据 mode 调用不同的检索方法
+    try:
+        client = await os_svc.get_client()
+
         if mode == "vector":
-            results = await retrieval_service.dense_search(client, query, settings.OPENSEARCH_INDEX, top_k=top_k)
+            results = await retrieval_service.dense_search(
+                client, query, settings.OPENSEARCH_INDEX, top_k=top_k
+            )
         elif mode == "bm25":
-            results = await retrieval_service.sparse_search(client, query, settings.OPENSEARCH_INDEX, top_k=top_k)
+            results = await retrieval_service.sparse_search(
+                client, query, settings.OPENSEARCH_INDEX, top_k=top_k
+            )
         elif mode == "rrf":
-            results = await retrieval_service.rrf_search(client, query, settings.OPENSEARCH_INDEX, top_k=top_k)
+            results = await retrieval_service.rrf_search(
+                client, query, settings.OPENSEARCH_INDEX, top_k=top_k
+            )
         else:  # hybrid
-            results = await retrieval_service.hybrid_search(client, query, settings.OPENSEARCH_INDEX, top_k=top_k)
+            results = await retrieval_service.hybrid_search(
+                client, query, settings.OPENSEARCH_INDEX, top_k=top_k
+            )
 
         if not results:
             return "未找到相关文档内容，请先上传论文。"
@@ -102,8 +123,58 @@ async def search_documents(query: str, mode: Literal["bm25", "vector", "hybrid",
         return "\n\n---\n\n".join(parts)
 
     except Exception as e:
-        logger.error(f"搜索工具调用失败: {e}", exc_info=True)
+        logger.error("搜索工具调用失败: %s", e, exc_info=True)
         return f"搜索失败：{e}"
+
+
+async def _search_documents_fallback(query: str, top_k: int = 5) -> str:
+    """
+    PostgreSQL 回退搜索（当 OpenSearch 不可用时）
+
+    策略：简单的关键词匹配，从 PostgreSQL 中查找包含查询词的 chunks
+    """
+    from sqlalchemy import select, func
+    from app.core.database import AsyncSessionLocal
+    from app.models.document import Chunk, Document
+
+    try:
+        async with AsyncSessionLocal() as session:
+            # 简单关键词搜索：内容包含查询词中的任意一个关键词
+            keywords = [kw.strip() for kw in query.split() if len(kw.strip()) > 1]
+            if not keywords:
+                keywords = [query.strip()]
+
+            # 构建 OR 条件
+            conditions = []
+            for kw in keywords:
+                conditions.append(Chunk.content.ilike(f"%{kw}%"))
+
+            from sqlalchemy import or_
+            stmt = (
+                select(Chunk, Document.filename)
+                .join(Document, Chunk.document_id == Document.id)
+                .where(or_(*conditions))
+                .order_by(Chunk.chunk_index)
+                .limit(top_k)
+            )
+
+            result = await session.execute(stmt)
+            rows = result.all()
+
+            if not rows:
+                return "未找到相关文档内容，请先上传论文。"
+
+            parts = []
+            for i, (chunk, filename) in enumerate(rows, 1):
+                parts.append(
+                    f"[结果 {i}，来自 {filename}]\n{chunk.content[:500]}"
+                )
+
+            return "\n\n---\n\n".join(parts)
+
+    except Exception as e:
+        logger.error("PostgreSQL 回退搜索失败: %s", e, exc_info=True)
+        return f"搜索失败（数据库模式）：{e}"
 
 
 @tool
@@ -129,14 +200,17 @@ async def get_document_summary(document_id: str) -> str:
                 return f"找不到 ID 为 {document_id} 的论文"
 
             result = await session.execute(
-                select(Chunk).where(Chunk.document_id == document_id).order_by(Chunk.chunk_index).limit(3)
+                select(Chunk)
+                .where(Chunk.document_id == document_id)
+                .order_by(Chunk.chunk_index)
+                .limit(3)
             )
             chunks = result.scalars().all()
             preview = "\n".join([c.content[:200] for c in chunks])
             return f"论文: {doc.filename}\n上传时间: {doc.created_at}\n内容预览:\n{preview}"
 
     except Exception as e:
-        logger.error(f"获取摘要失败: {e}", exc_info=True)
+        logger.error("获取摘要失败: %s", e, exc_info=True)
         return f"获取摘要失败：{e}"
 
 
@@ -151,13 +225,6 @@ TOOLS = [search_documents, get_document_summary]
 def _build_agent_graph():
     """
     构建 LangGraph 的 Agent 图（状态流转图）
-
-    流程图（大白话）：
-    1. agent 节点：LLM 看用户问题，决定是直接回答还是调用工具
-    2. 条件边：如果 LLM 调用了工具 → 跳到 tools 节点
-                 如果 LLM 直接回答了 → 跳到 END（结束）
-    3. tools 节点：执行工具（比如搜索文档），把结果还给 LLM
-    4. 回到步骤 1（循环，直到 LLM 给出最终答案）
     """
     from langgraph.prebuilt import ToolNode
 
@@ -190,7 +257,7 @@ def _build_agent_graph():
     def should_continue(state: AgentState) -> str:
         """
         判断下一步去哪：
-        - 如果最后一条消息有 tool_calls（调用工具的请求）→ 去 "tools"
+        - 如果最后一条消息有 tool_calls → 去 "tools"
         - 否则 → 去 END（结束）
         """
         last_message = state["messages"][-1]
@@ -283,7 +350,7 @@ class AgentService:
             }
 
         except Exception as e:
-            logger.error(f"Agent 对话失败: {e}", exc_info=True)
+            logger.error("Agent 对话失败: %s", e, exc_info=True)
             return {
                 "answer": f"抱歉，Agent 处理失败：{e}",
                 "sources": [],
@@ -299,10 +366,24 @@ class AgentService:
         """
         标准 RAG 模式：固定流程，直接检索 → 回答
         """
-        client = await opensearch_service.get_client()
-        results = await retrieval_service.hybrid_search(
-            client, message, settings.OPENSEARCH_INDEX, top_k=top_k
-        )
+        os_svc = _get_opensearch_service()
+
+        if _opensearch_available and os_svc is not None:
+            # OpenSearch 可用，走正常流程
+            try:
+                client = await os_svc.get_client()
+                results = await retrieval_service.hybrid_search(
+                    client, message, settings.OPENSEARCH_INDEX, top_k=top_k
+                )
+            except Exception as e:
+                logger.warning("OpenSearch 检索失败，降级到 PostgreSQL: %s", e)
+                results = []
+        else:
+            results = []
+
+        # 如果 OpenSearch 没有结果，尝试 PostgreSQL 回退
+        if not results:
+            results = await self._pg_fallback_search(message, top_k)
 
         if not results:
             return {
@@ -351,13 +432,60 @@ class AgentService:
             }
 
         except Exception as e:
-            logger.error(f"标准 RAG 回答失败: {e}", exc_info=True)
+            logger.error("标准 RAG 回答失败: %s", e, exc_info=True)
             return {
                 "answer": f"抱歉，处理失败：{e}",
                 "sources": sources,
                 "mode": "standard",
                 "error": str(e),
             }
+
+    async def _pg_fallback_search(
+        self, query: str, top_k: int = 5
+    ) -> List[Dict[str, Any]]:
+        """
+        PostgreSQL 回退搜索
+        """
+        from sqlalchemy import or_, select
+
+        from app.core.database import AsyncSessionLocal
+        from app.models.document import Chunk, Document
+
+        try:
+            keywords = [kw.strip() for kw in query.split() if len(kw.strip()) > 1]
+            if not keywords:
+                keywords = [query.strip()]
+
+            async with AsyncSessionLocal() as session:
+                conditions = [
+                    Chunk.content.ilike(f"%{kw}%") for kw in keywords
+                ]
+                stmt = (
+                    select(Chunk, Document.filename)
+                    .join(Document, Chunk.document_id == Document.id)
+                    .where(or_(*conditions))
+                    .order_by(Chunk.chunk_index)
+                    .limit(top_k)
+                )
+
+                result = await session.execute(stmt)
+                rows = result.all()
+
+                results = []
+                for i, (chunk, filename) in enumerate(rows, 1):
+                    results.append({
+                        "id": str(chunk.id),
+                        "content": chunk.content,
+                        "score": 1.0 - (i * 0.1),  # 简单的降序分数
+                        "document_id": str(chunk.document_id),
+                        "chunk_index": chunk.chunk_index,
+                        "meta_data": chunk.meta_data or {},
+                    })
+                return results
+
+        except Exception as e:
+            logger.error("PostgreSQL 回退搜索失败: %s", e, exc_info=True)
+            return []
 
 
 # ----------------------------------------------------------------
