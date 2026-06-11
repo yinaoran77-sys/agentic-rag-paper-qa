@@ -211,7 +211,7 @@ async function uploadFile(file) {
     const formData = new FormData();
     formData.append('file', file);
 
-    const res = await fetch(`${API_BASE}/documents/upload`, { method: 'POST', body: formData });
+    const res = await fetch(`${API_BASE}/documents`, { method: 'POST', body: formData });
     
     // 检查 HTTP 状态码
     if (!res.ok) {
