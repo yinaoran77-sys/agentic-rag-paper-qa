@@ -35,6 +35,7 @@ def upgrade() -> None:
     sa.Column('filename', sa.String(length=255), nullable=False, comment='原始文件名'),
     sa.Column('file_type', sa.String(length=10), nullable=False, comment='文件类型：pdf/docx/txt'),
     sa.Column('file_size', sa.Integer(), nullable=True, comment='文件大小（字节）'),
+    sa.Column('file_path', sa.String(length=500), nullable=True, comment='文件存储路径'),
     sa.Column('status', sa.String(length=20), nullable=False, comment='处理状态：uploaded/parsing/chunking/embedding/ready/error'),
     sa.Column('error_message', sa.Text(), nullable=True, comment='失败时的错误信息'),
     sa.Column('meta_data', sa.JSON(), nullable=True, comment='额外元数据（作者、年份等）'),
