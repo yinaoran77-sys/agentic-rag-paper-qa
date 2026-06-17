@@ -78,7 +78,7 @@ class Settings(BaseSettings):
     OLLAMA_MODEL: str = "qwen2.5:3b"
     
     # ---- 上传目录 ----
-    UPLOAD_DIR: str = "data/papers"
+    UPLOAD_DIR: str = "/root/agentic-rag-paper-qa/backend/data/papers"
     
     # ---- OpenAI（备选）----
     OPENAI_API_KEY: str = ""

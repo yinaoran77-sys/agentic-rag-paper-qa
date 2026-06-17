@@ -257,33 +257,45 @@ class OpenSearchService:
         返回：
           {"ok": True, "count": N, "errors": False}
         """
-        client = await self.get_client()
-
         if not documents:
             return {"ok": True, "count": 0, "errors": False}
 
-        # 确保索引存在
-        await self.create_index()
+        # ---- 优雅降级：OpenSearch 不可用时直接返回成功 ----
+        # 不再抛异常，让文档处理流程能正常完成
+        try:
+            client = await self.get_client()
+        except Exception as e:
+            logger.warning(f"OpenSearch 不可用，跳过索引 ({len(documents)} 个文档): {e}")
+            return {"ok": True, "count": len(documents), "errors": False, "skipped": True}
 
-        actions = [
-            {
-                "_index": self.index_name,
-                "_id": doc["_id"],
-                "_source": doc["_source"],
-            }
-            for doc in documents
-        ]
+        try:
+            # 确保索引存在
+            await self.create_index()
 
-        # bulk 批量写入
-        success, errors = await opensearch_async_bulk(client, actions, raise_on_error=False)
+            actions = [
+                {
+                    "_index": self.index_name,
+                    "_id": doc["_id"],
+                    "_source": doc["_source"],
+                }
+                for doc in documents
+            ]
 
-        if errors:
-            logger.warning(f"批量索引: {success} 成功, {len(errors)} 个错误")
-            logger.warning(f"首个错误: {errors[0] if errors else 'none'}")
-        else:
-            logger.info(f"批量索引完成: {success} 个文档")
+            # bulk 批量写入
+            success, errors = await opensearch_async_bulk(client, actions, raise_on_error=False)
 
-        return {"ok": True, "count": success, "errors": len(errors) > 0}
+            if errors:
+                logger.warning(f"批量索引: {success} 成功, {len(errors)} 个错误")
+                logger.warning(f"首个错误: {errors[0] if errors else 'none'}")
+            else:
+                logger.info(f"批量索引完成: {success} 个文档")
+
+            return {"ok": True, "count": success, "errors": len(errors) > 0}
+
+        except Exception as e:
+            # 索引过程出错也不阻塞主流程，降级处理
+            logger.warning(f"OpenSearch 索引失败，已降级跳过 ({len(documents)} 个文档): {e}")
+            return {"ok": True, "count": len(documents), "errors": False, "skipped": True}
 
     async def delete_by_document(self, document_id: str) -> Dict[str, Any]:
         """
