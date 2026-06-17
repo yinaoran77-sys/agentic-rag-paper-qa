@@ -53,7 +53,7 @@ async def _check_opensearch() -> bool:
     global _opensearch_available
     try:
         client = AsyncOpenSearch(
-            hosts=[settings.OPENSEARCH_URL],
+            hosts=[{"host": settings.OPENSEARCH_HOST, "port": settings.OPENSEARCH_PORT}],
             request_timeout=3,  # 3秒超时
         )
         await client.info()
@@ -70,7 +70,7 @@ async def _check_opensearch_sync() -> bool:
     """同步检查 OpenSearch 连接（用于导入时）"""
     try:
         client = AsyncOpenSearch(
-            hosts=[settings.OPENSEARCH_URL],
+            hosts=[{"host": settings.OPENSEARCH_HOST, "port": settings.OPENSEARCH_PORT}],
             request_timeout=3,
         )
         info = await client.info()

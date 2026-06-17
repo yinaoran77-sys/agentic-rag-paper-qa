@@ -41,7 +41,7 @@ class Settings(BaseSettings):
     POSTGRES_PORT: int = 5432
     POSTGRES_USER: str = "raguser"
     POSTGRES_PASSWORD: str = "ragpassword"
-    POSTGRES_DB: str = "agentic_rag"
+    POSTGRES_DB: str = "ragdb"
     
     @property
     def DATABASE_URL(self) -> str:
