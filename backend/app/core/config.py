@@ -76,10 +76,16 @@ class Settings(BaseSettings):
     # ---- Ollama ----
     OLLAMA_BASE_URL: str = "http://localhost:11434"
     OLLAMA_MODEL: str = "qwen2.5:3b"
-    
-    # ---- 上传目录 ----
-    UPLOAD_DIR: str = "/root/agentic-rag-paper-qa/backend/data/papers"
-    
+
+    # ---- LLM 提供商 ----
+    # 可选值: "ollama" / "dashscope" / "openai"
+    LLM_PROVIDER: str = "dashscope"
+
+    # ---- 通义千问 (DashScope) ----
+    DASHSCOPE_API_KEY: str = ""  # 在 .env 文件中设置
+    DASHSCOPE_MODEL: str = "qwen-turbo"
+    DASHSCOPE_BASE_URL: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+
     # ---- OpenAI（备选）----
     OPENAI_API_KEY: str = ""
     OPENAI_MODEL: str = "gpt-4o-mini"

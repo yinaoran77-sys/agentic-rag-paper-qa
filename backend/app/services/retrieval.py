@@ -12,9 +12,10 @@
 - BM25 擅长精确匹配（"Transformer 架构"就是"Transformer 架构"）
 - 两者互补，混合后检索效果 >> 单一方法
 
-Embedding 模型选择：
-- 默认用 BAAI/bge-large-zh-v1.5（中文最优，1024 维）
-- 也支持 Ollama 原生模型（nomic-embed-text 等）
+Embedding 模型选择（按优先级）：
+- LLM_PROVIDER=dashscope → 用 DashScope embedding API（text-embedding-v2，1024 维）
+- LLM_PROVIDER=openai    → 用 OpenAI embedding API
+- 其他（ollama）          → 用本地 Ollama embedding API
 """
 
 import logging
@@ -46,18 +47,70 @@ class RetrievalService:
     async def embed_text(self, text: str) -> List[float]:
         """
         文字 → 向量
-
-        调用 Ollama Embeddings API 把一段文字变成 1024 维向量。
-        为什么用 Ollama 而不是 OpenAI？
-        - 本地运行，没网络延迟
-        - 免费，没 API 费用
-        - bge-large-zh-v1.5 中文效果很好
-
+        
+        根据 LLM_PROVIDER 配置选择嵌入提供商：
+        - dashscope: 调用阿里云 DashScope embedding API（text-embedding-v2，1024 维）
+        - openai:    调用 OpenAI embedding API
+        - 其他:      调用本地 Ollama embedding API（nomic-embed-text 等）
+        
         参数：
           text: 待向量化的文字
         返回：
           [0.123, -0.456, ...] 1024 维浮点数列表
         """
+        provider = settings.LLM_PROVIDER.lower()
+
+        # ---- DashScope embedding API（OpenAI 兼容模式）----
+        if provider == "dashscope" and settings.DASHSCOPE_API_KEY:
+            return await self._embed_dashscope(text)
+
+        # ---- OpenAI embedding API ----
+        if provider == "openai" and settings.OPENAI_API_KEY:
+            return await self._embed_openai(text)
+
+        # ---- Ollama embedding API（默认/fallback）----
+        return await self._embed_ollama(text)
+
+    async def _embed_dashscope(self, text: str) -> List[float]:
+        """调用 DashScope embedding API（OpenAI 兼容模式）"""
+        url = f"{settings.DASHSCOPE_BASE_URL}/embeddings"
+        headers = {
+            "Authorization": f"Bearer {settings.DASHSCOPE_API_KEY}",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "model": "text-embedding-v2",
+            "input": text,
+        }
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, json=payload, headers=headers, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+                    resp.raise_for_status()
+                    data = await resp.json()
+                    # OpenAI 兼容格式: {"data": [{"embedding": [...]}]}
+                    embedding = data["data"][0]["embedding"]
+                    return embedding
+
+        except aiohttp.ClientError as e:
+            logger.error(f"DashScope embedding 请求失败: {e}")
+            raise
+        except Exception as e:
+            logger.error(f"DashScope embedding 异常: {e}")
+            raise
+
+    async def _embed_openai(self, text: str) -> List[float]:
+        """调用 OpenAI embedding API"""
+        import openai
+        client = openai.OpenAI(api_key=settings.OPENAI_API_KEY)
+        response = client.embeddings.create(
+            model="text-embedding-3-small",
+            input=text,
+        )
+        return response.data[0].embedding
+
+    async def _embed_ollama(self, text: str) -> List[float]:
+        """调用 Ollama embedding API（原始实现）"""
         payload = {
             "model": self.embedding_model,
             "prompt": text,

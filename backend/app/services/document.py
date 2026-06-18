@@ -221,11 +221,71 @@ def extract_structured_from_pdf(pdf_path: str) -> List[Dict[str, Any]]:
 # ================================================================
 
 EMBEDDING_MODEL = settings.EMBEDDING_MODEL  # 来自 .env，默认 nomic-embed-text
-EMBEDDING_DIM = 768  # nomic-embed-text 输出 768 维
+
+# 嵌入维度（根据提供商动态确定）
+if settings.LLM_PROVIDER.lower() == "dashscope":
+    EMBEDDING_DIM = 1024  # DashScope text-embedding-v2 输出 1024 维
+elif settings.LLM_PROVIDER.lower() == "openai":
+    EMBEDDING_DIM = 1536  # OpenAI text-embedding-3-small 输出 1536 维
+else:
+    EMBEDDING_DIM = 768   # nomic-embed-text 输出 768 维
 
 
 async def get_embedding(text: str) -> List[float]:
-    """调用 Ollama Embeddings API 获取向量"""
+    """
+    获取文本嵌入向量
+    
+    根据 LLM_PROVIDER 配置选择嵌入提供商：
+    - dashscope: 调用阿里云 DashScope embedding API
+    - openai:    调用 OpenAI embedding API
+    - 其他:      调用本地 Ollama embedding API
+    """
+    provider = settings.LLM_PROVIDER.lower()
+
+    # ---- DashScope embedding API（OpenAI 兼容模式）----
+    if provider == "dashscope" and settings.DASHSCOPE_API_KEY:
+        return await _embed_dashscope(text)
+
+    # ---- OpenAI embedding API ----
+    if provider == "openai" and settings.OPENAI_API_KEY:
+        return await _embed_openai(text)
+
+    # ---- Ollama embedding API（默认/fallback）----
+    return await _embed_ollama(text)
+
+
+async def _embed_dashscope(text: str) -> List[float]:
+    """调用 DashScope embedding API（OpenAI 兼容模式）"""
+    url = f"{settings.DASHSCOPE_BASE_URL}/embeddings"
+    headers = {
+        "Authorization": f"Bearer {settings.DASHSCOPE_API_KEY}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "model": "text-embedding-v2",
+        "input": text,
+    }
+
+    async with aiohttp.ClientSession() as session:
+        async with session.post(url, json=payload, headers=headers, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+            resp.raise_for_status()
+            data = await resp.json()
+            return data["data"][0]["embedding"]
+
+
+async def _embed_openai(text: str) -> List[float]:
+    """调用 OpenAI embedding API"""
+    import openai
+    client = openai.OpenAI(api_key=settings.OPENAI_API_KEY)
+    response = client.embeddings.create(
+        model="text-embedding-3-small",
+        input=text,
+    )
+    return list(response.data[0].embedding)
+
+
+async def _embed_ollama(text: str) -> List[float]:
+    """调用 Ollama embedding API（原始实现）"""
     url = f"{settings.OLLAMA_BASE_URL}/api/embeddings"
     payload = {"model": EMBEDDING_MODEL, "prompt": text}
     async with aiohttp.ClientSession() as session:
