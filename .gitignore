@@ -103,4 +103,6 @@ frontend/.vite/
 *.gguf
 *.bin
 *.safetensors
-models/
+# 只忽略根目录的 models（AI模型权重），不忽略 app/models/
+/models/
+!/backend/app/models/
