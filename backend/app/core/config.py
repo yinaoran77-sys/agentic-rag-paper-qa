@@ -89,6 +89,9 @@ class Settings(BaseSettings):
     # ---- OpenAI（备选）----
     OPENAI_API_KEY: str = ""
     OPENAI_MODEL: str = "gpt-4o-mini"
+
+    # ---- 上传目录 ----
+    UPLOAD_DIR: str = "/root/agentic-rag-paper-qa/backend/data/papers"
     
     # ---- Langfuse ----
     LANGFUSE_SECRET_KEY: str = ""
